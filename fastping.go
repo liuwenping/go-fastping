@@ -137,6 +137,8 @@ type Pinger struct {
 	ctx     *context
 	mu      sync.Mutex
 
+	// Count of sendICMP
+	Times int
 	// Size in bytes of the payload to send
 	Size int
 	// Number of (nano,milli)seconds of an idle timeout. Once it passed,
@@ -164,6 +166,7 @@ func NewPinger() *Pinger {
 		source6: "",
 		hasIPv4: false,
 		hasIPv6: false,
+		Times:   -1,
 		Size:    TimeSliceLength,
 		MaxRTT:  time.Second,
 		OnRecv:  nil,
@@ -326,10 +329,15 @@ func (p *Pinger) Run() error {
 	p.mu.Lock()
 	p.ctx = newContext()
 	p.mu.Unlock()
-	p.run(true)
+	p.run()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.ctx.err
+}
+
+func (p *Pinger) RunOnce() error {
+	p.Times = 1
+	return p.Run()
 }
 
 // RunLoop invokes send/receive procedure repeatedly. It sends packets to all
@@ -359,7 +367,7 @@ func (p *Pinger) RunLoop() {
 	p.mu.Lock()
 	p.ctx = newContext()
 	p.mu.Unlock()
-	go p.run(false)
+	go p.run()
 }
 
 // Done returns a channel that is closed when RunLoop() is stopped by an error
@@ -398,7 +406,7 @@ func (p *Pinger) listen(netProto string, source string) *icmp.PacketConn {
 	return conn
 }
 
-func (p *Pinger) run(once bool) {
+func (p *Pinger) run() {
 	p.debugln("Run(): Start")
 	var conn, conn6 *icmp.PacketConn
 	if p.hasIPv4 {
@@ -433,6 +441,7 @@ func (p *Pinger) run(once bool) {
 	queue, err := p.sendICMP(conn, conn6)
 
 	ticker := time.NewTicker(p.MaxRTT)
+	count := p.Times
 
 mainloop:
 	for {
@@ -453,7 +462,8 @@ mainloop:
 			if handler != nil {
 				handler()
 			}
-			if once || err != nil {
+			count--
+			if (p.Times != -1 && count <= 0) || err != nil {
 				break mainloop
 			}
 			p.debugln("Run(): call sendICMP()")
